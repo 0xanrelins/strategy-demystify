@@ -6,6 +6,10 @@ import { join } from 'path';
 const KIMI_API_KEY = process.env.KIMI_API_KEY || 'sk-kimi-fdB4OfFqHH3I6DdNrertB8YCT1yWm2Fzv5mFWkdL7kR4CxaLdXJA0Z9heGEGB2id';
 const KIMI_API_URL = 'https://api.moonshot.cn/v1/chat/completions';
 
+// Debug: Log key presence (not the actual key)
+console.log('Kimi API Key present:', !!KIMI_API_KEY);
+console.log('Kimi API Key format:', KIMI_API_KEY?.substring(0, 20) + '...');
+
 // PolyBackTest API configuration
 const POLYBACKTEST_API_KEY = process.env.POLYBACKTEST_API_KEY;
 const POLYBACKTEST_API_URL = process.env.POLYBACKTEST_API_URL || 'https://api.polybacktest.com/v1';
@@ -191,8 +195,14 @@ Provide your analysis in the required JSON format.`,
     });
 
     if (!kimiResponse.ok) {
-      const errorData = await kimiResponse.json().catch(() => ({}));
-      throw new Error(`Kimi API error: ${kimiResponse.status} - ${errorData.error?.message || kimiResponse.statusText}`);
+      const errorText = await kimiResponse.text().catch(() => 'No error details');
+      console.error('Kimi API Error Response:', {
+        status: kimiResponse.status,
+        statusText: kimiResponse.statusText,
+        body: errorText,
+        headers: Object.fromEntries(kimiResponse.headers.entries()),
+      });
+      throw new Error(`Kimi API error: ${kimiResponse.status} - ${kimiResponse.statusText}. Details: ${errorText.substring(0, 200)}`);
     }
 
     const kimiData = await kimiResponse.json();
