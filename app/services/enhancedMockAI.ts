@@ -1,10 +1,11 @@
 import { ChatMessage, generateId } from '../types';
 import { ScoreResult, MetricValues } from '../types/scoring';
 
-// Enhanced AI service that tries real API first, falls back to mock
+// AI service that calls real PolyBackTest API
+// NO MOCK FALLBACK - if API fails, user is informed
 export async function enhancedAIResponse(question: string): Promise<ChatMessage> {
   try {
-    // Try to call real API first
+    // Call real API
     const response = await fetch('/api/backtest', {
       method: 'POST',
       headers: {
@@ -18,29 +19,68 @@ export async function enhancedAIResponse(question: string): Promise<ChatMessage>
       }),
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      
-      if (data.success) {
-        return createChatMessageFromAPI(question, data);
-      }
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.details || `API Error: ${response.status}`);
     }
 
-    // If API fails, use mock fallback
-    console.log('API failed or not configured, using mock data');
-    return mockAIResponse(question);
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Backtest failed');
+    }
+
+    return createChatMessageFromAPI(question, data);
     
   } catch (error) {
     console.error('API call failed:', error);
-    return mockAIResponse(question);
+    
+    // Return error message instead of mock data
+    return {
+      id: generateId(),
+      question: question.trim(),
+      answer: formatErrorResponse(error instanceof Error ? error.message : 'Unknown error'),
+      scores: {
+        pt: 0,
+        pro: 0,
+        sr: 0,
+        card: 0,
+        ae: 0,
+        total: 0,
+      },
+      timestamp: Date.now(),
+      isExpanded: false,
+    };
   }
+}
+
+// Format error response
+function formatErrorResponse(errorMessage: string): string {
+  return `## ⚠️ Backtest Failed
+
+**Error:** ${errorMessage}
+
+### Possible Causes:
+- PolyBackTest API key not configured
+- API rate limit exceeded
+- Network connectivity issue
+- Invalid strategy parameters
+
+### How to Fix:
+1. Check your ".env.local" file has POLYBACKTEST_API_KEY
+2. Verify your API key is valid at https://polybacktest.com
+3. Check your internet connection
+4. Try a different strategy description
+
+---
+*Note: This system uses real historical data from PolyBackTest API. No mock data is used.*`;
 }
 
 // Create ChatMessage from API response
 function createChatMessageFromAPI(question: string, data: any): ChatMessage {
-  const { metrics, score, backtest } = data;
+  const { metrics, score, backtest, warnings, strategy } = data;
   
-  const answer = formatAIResponse(score, metrics, backtest);
+  const answer = formatAIResponse(score, metrics, backtest, warnings, strategy);
   
   return {
     id: generateId(),
@@ -62,7 +102,7 @@ function createChatMessageFromAPI(question: string, data: any): ChatMessage {
 }
 
 // Format AI response
-function formatAIResponse(score: ScoreResult, metrics: MetricValues, backtest: any): string {
+function formatAIResponse(score: ScoreResult, metrics: MetricValues, backtest: any, warnings?: string[], strategy?: any): string {
   const { breakdown, category, rating, recommendation, redFlags } = score;
   
   let response = `## Strategy Analysis\n\n`;
@@ -70,6 +110,24 @@ function formatAIResponse(score: ScoreResult, metrics: MetricValues, backtest: a
   // Overall Score
   response += `**Overall Score: ${breakdown.total}/100** ${rating.symbol}\n`;
   response += `**Category: ${rating.label}**\n\n`;
+  
+  // Warnings (if any)
+  if (warnings && warnings.length > 0) {
+    response += `### ⚠️ Parser Warnings\n\n`;
+    warnings.forEach(warning => {
+      response += `- ${warning}\n`;
+    });
+    response += `\n`;
+  }
+  
+  // Recognized Patterns
+  if (strategy?.recognizedPatterns && strategy.recognizedPatterns.length > 0) {
+    response += `### ✅ Recognized Patterns\n\n`;
+    strategy.recognizedPatterns.forEach((pattern: string) => {
+      response += `- \`${pattern}\`\n`;
+    });
+    response += `\n`;
+  }
   
   // Backtest Summary
   response += `### Backtest Summary\n`;
@@ -93,7 +151,7 @@ function formatAIResponse(score: ScoreResult, metrics: MetricValues, backtest: a
   
   // Red Flags
   if (redFlags.length > 0) {
-    response += `### ⚠️ Red Flags Detected\n\n`;
+    response += `### 🚩 Red Flags Detected\n\n`;
     redFlags.forEach(flag => {
       const icon = flag.severity === 'critical' ? '❌' : '⚠️';
       response += `${icon} **${flag.type}:** ${flag.message}\n`;
@@ -106,60 +164,4 @@ function formatAIResponse(score: ScoreResult, metrics: MetricValues, backtest: a
   response += `${recommendation}\n`;
   
   return response;
-}
-
-// Mock fallback (when API not available)
-function mockAIResponse(question: string): ChatMessage {
-  // Simulate calculation based on question hash
-  const hash = hashString(question.toLowerCase());
-  
-  const metrics: MetricValues = {
-    profitFactor: 1.0 + (hash % 25) / 10,
-    maxDrawdown: 5 + (hash % 35),
-    sharpeRatio: 0.5 + (hash % 20) / 10,
-    cagr: 5 + (hash % 45),
-    winRate: 40 + (hash % 40),
-  };
-  
-  // Import dynamically to avoid circular dependency
-  const { calculateTotalScore } = require('./scoreCalculator');
-  const score = calculateTotalScore(metrics, 50);
-  
-  const mockBacktest = {
-    trades: 30 + (hash % 40),
-    startDate: Date.now() - 90 * 24 * 60 * 60 * 1000,
-    endDate: Date.now(),
-    initialCapital: 10000,
-    finalCapital: 10000 * (1 + metrics.cagr / 100),
-    totalReturn: metrics.cagr,
-  };
-  
-  const answer = formatAIResponse(score, metrics, mockBacktest);
-  
-  return {
-    id: generateId(),
-    question: question.trim(),
-    answer,
-    scores: {
-      pt: metrics.profitFactor,
-      pro: metrics.winRate,
-      sr: metrics.sharpeRatio,
-      card: metrics.maxDrawdown,
-      ae: metrics.cagr,
-      total: score.breakdown.total,
-    },
-    timestamp: Date.now(),
-    isExpanded: false,
-  };
-}
-
-// Simple hash function
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash);
 }

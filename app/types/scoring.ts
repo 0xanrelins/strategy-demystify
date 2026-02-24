@@ -23,6 +23,7 @@ export interface BacktestResult {
   totalReturn: number;
   startDate: number;
   endDate: number;
+  warnings?: string[];
 }
 
 export interface ScoreBreakdown {
