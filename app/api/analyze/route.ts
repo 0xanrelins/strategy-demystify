@@ -4,11 +4,7 @@ import { join } from 'path';
 
 // Kimi API configuration
 const KIMI_API_KEY = process.env.KIMI_API_KEY || 'sk-kimi-fdB4OfFqHH3I6DdNrertB8YCT1yWm2Fzv5mFWkdL7kR4CxaLdXJA0Z9heGEGB2id';
-const KIMI_API_URL = 'https://api.moonshot.ai/v1/chat/completions';
-
-// Debug: Log key presence (not the actual key)
-console.log('Kimi API Key present:', !!KIMI_API_KEY);
-console.log('Kimi API Key format:', KIMI_API_KEY?.substring(0, 20) + '...');
+const KIMI_API_URL = 'https://api.kimi.com/coding/v1/chat/completions';
 
 // PolyBackTest API configuration
 const POLYBACKTEST_API_KEY = process.env.POLYBACKTEST_API_KEY;
@@ -167,7 +163,7 @@ Rules:
         'Authorization': `Bearer ${KIMI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'kimi-k2-5',
+        model: 'kimi-for-coding',
         messages: [
           {
             role: 'system',
