@@ -10,29 +10,15 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const POLYBACKTEST_API_KEY = process.env.POLYBACKTEST_API_KEY;
 const POLYBACKTEST_API_URL = process.env.POLYBACKTEST_API_URL || 'https://api.polybacktest.com/v1';
 
-// Load skill files
-function loadSkillFiles(): string {
+// Load LLM-optimized skill file
+function loadSkillFile(): string {
   try {
     const skillsDir = join(process.cwd(), 'app', 'lib', 'skills');
-    const files = [
-      'SKILL.md',
-      'backtest_evaluation_metrics.md',
-      'how_to_evaluate_backtest_results.md',
-      'strategy_scoring_framework.md'
-    ];
-    
-    let content = '';
-    for (const file of files) {
-      try {
-        const fileContent = readFileSync(join(skillsDir, file), 'utf-8');
-        content += `\n\n=== ${file} ===\n\n${fileContent}`;
-      } catch (e) {
-        console.warn(`Could not load ${file}:`, e);
-      }
-    }
+    const filePath = join(skillsDir, 'STRATEGY_ANALYZER_LLM.md');
+    const content = readFileSync(filePath, 'utf-8');
     return content;
   } catch (e) {
-    console.error('Failed to load skill files:', e);
+    console.error('Failed to load skill file:', e);
     return '';
   }
 }
@@ -99,8 +85,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Load skill files for system prompt
-    const skillContext = loadSkillFiles();
+    // Load LLM-optimized skill file
+    const skillContext = loadSkillFile();
 
     // Fetch PolyBackTest data
     let polyData;
@@ -112,48 +98,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Build system prompt
-    const systemPrompt = `You are an expert trading strategy analyst and risk assessor specializing in Polymarket prediction markets and crypto trading strategies.
+    const systemPrompt = `${skillContext}
 
-${skillContext}
+CONTEXT:
+You are analyzing a trading strategy for Polymarket prediction markets.
 
-Your task is to:
-1. Analyze the user's strategy description
-2. If PolyBackTest data is available, reference real market conditions
-3. Apply the 0-100 scoring framework from the skill documentation
-4. Provide detailed analysis with risk assessment
-5. Give a clear verdict: DEPLOY, REJECT, or REVISE
+PolyBackTest Data Available: ${polyData.market ? 'YES' : 'NO'}
+${polyData.market ? `Market: ${polyData.market.slug} | Snapshots: ${polyData.snapshots.length} | Total Markets: ${polyData.totalMarkets}` : 'No market data available - evaluate based on strategy description only'}
 
-CRITICAL: Always respond with valid JSON in this exact format:
-{
-  "strategy_name": "Brief name of the strategy",
-  "understanding": "Your interpretation of what the strategy does",
-  "market_analysis": "Analysis of market conditions if data available",
-  "risk_assessment": {
-    "level": "LOW|MEDIUM|HIGH|CRITICAL",
-    "factors": ["List of risk factors"],
-    "warnings": ["Specific warnings about this strategy"]
-  },
-  "score_breakdown": {
-    "profit_factor": "0-20",
-    "max_drawdown": "0-20",
-    "sharpe_ratio": "0-20",
-    "cagr": "0-20",
-    "win_rate": "0-20",
-    "bonus": "0-5",
-    "penalty": "0-10",
-    "total": "0-100"
-  },
-  "evaluation": "Detailed paragraph evaluating the strategy",
-  "recommendation": "Specific actionable recommendation",
-  "verdict": "DEPLOY|REJECT|REVISE",
-  "confidence": "0-100"
-}
-
-Rules:
-- Be honest about limitations (e.g., "Insufficient data to properly evaluate" if PolyBackTest data is missing)
-- Apply the scoring framework strictly
-- Consider time-window and price-threshold strategies carefully
-- Binary market strategies (Polymarket) have different risk profiles than spot trading`;
+TASK:
+Analyze the user's strategy and return ONLY valid JSON matching the format specified in the skill documentation above.`;
 
     // Call OpenRouter API with Kimi model
     if (!OPENROUTER_API_KEY) {
@@ -177,17 +131,9 @@ Rules:
           },
           {
             role: 'user',
-            content: `Analyze this trading strategy and provide a complete evaluation:
+            content: `STRATEGY TO ANALYZE: "${strategy}"
 
-STRATEGY: "${strategy}"
-
-${polyData.market ? `MARKET DATA AVAILABLE:
-- Market: ${polyData.market.slug || polyData.market.market_id}
-- Type: ${polyData.market.market_type || timeframe}
-- Snapshots: ${polyData.snapshots.length} data points
-- Total Markets Available: ${polyData.totalMarkets}` : 'MARKET DATA: Not available - evaluation based on strategy description only'}
-
-Provide your analysis in the required JSON format.`,
+Apply the scoring algorithm from your instructions. Return valid JSON only.`,
           },
         ],
         temperature: 0.2,

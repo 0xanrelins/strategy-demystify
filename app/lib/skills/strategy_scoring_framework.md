@@ -761,36 +761,6 @@ FINAL SCORE: ___/100
 CATEGORY: ___________
 ```
 
-### Excel Formula Template
-
-```excel
-// Assume metrics in cells B2:F2
-// PF, MDD, Sharpe, CAGR, WinRate
-
-// Profit Factor Score (B2)
-=IF(B2>=3, 20, IF(B2>=2.5, 18, IF(B2>=2, 16, IF(B2>=1.75, 14, IF(B2>=1.5, 10, IF(B2>=1.25, 6, IF(B2>=1, 2, 0)))))))
-
-// Max Drawdown Score (C2)
-=IF(C2<5, 20, IF(C2<10, 18, IF(C2<15, 16, IF(C2<20, 14, IF(C2<25, 10, IF(C2<30, 6, IF(C2<40, 2, 0)))))))
-
-// Sharpe Ratio Score (D2)
-=IF(D2>=3, 20, IF(D2>=2.5, 18, IF(D2>=2, 16, IF(D2>=1.5, 14, IF(D2>=1, 10, IF(D2>=0.5, 6, IF(D2>=0, 2, 0)))))))
-
-// CAGR Score (E2)
-=IF(E2>=50, 20, IF(E2>=35, 18, IF(E2>=25, 16, IF(E2>=20, 14, IF(E2>=15, 10, IF(E2>=10, 6, IF(E2>=5, 2, 0)))))))
-
-// Win Rate Score (F2)
-=IF(F2>=75, 8, IF(F2>=65, 20, IF(F2>=60, 18, IF(F2>=55, 16, IF(F2>=50, 14, IF(F2>=45, 12, IF(F2>=40, 10, IF(F2>=35, 6, 2))))))))
-
-// Total Score
-=SUM(G2:K2)
-
-// Category
-=IF(L2>=90, "Exceptional", IF(L2>=75, "Excellent", IF(L2>=60, "Good", IF(L2>=40, "Fair", "Poor"))))
-```
-
----
-
 ## Decision Matrix: What to Do With Your Score
 
 | Score | Category | Immediate Action | Next Steps |
