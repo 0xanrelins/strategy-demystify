@@ -273,31 +273,35 @@ async function fetchHistoricalData(market: string, timeframe: string, period: nu
 
   // Step 1: List markets to find the correct one
   const marketType = timeframeToMarketType(timeframe);
-  const marketsResponse = await fetch(
-    `${API_URL}/markets?market_type=${marketType}&limit=50`,
-    {
-      method: 'GET',
-      headers: {
-        'X-API-Key': API_KEY!,
-      },
-    }
-  );
+  const marketsUrl = `${API_URL}/markets?market_type=${marketType}&limit=50`;
+  
+  const marketsResponse = await fetch(marketsUrl, {
+    method: 'GET',
+    headers: {
+      'X-API-Key': API_KEY!,
+    },
+  });
 
   if (!marketsResponse.ok) {
-    throw new Error(`PolyBackTest markets API error: ${marketsResponse.status} - ${marketsResponse.statusText}`);
+    const errorText = await marketsResponse.text().catch(() => 'Unknown error');
+    throw new Error(`PolyBackTest markets API error: ${marketsResponse.status} - ${marketsResponse.statusText}. ${errorText}`);
   }
 
   const marketsData = await marketsResponse.json();
   
   if (!marketsData.markets || marketsData.markets.length === 0) {
-    throw new Error(`No markets found for type: ${marketType}`);
+    throw new Error(`No markets found for type: ${marketType}. Response: ${JSON.stringify(marketsData)}`);
   }
 
   // Find a BTC market (or the requested market)
   const targetMarket = marketsData.markets.find((m: any) => 
     m.slug?.toLowerCase().includes(market.toLowerCase()) ||
-    m.market_id?.includes(market)
+    m.market_id?.toLowerCase().includes(market.toLowerCase())
   ) || marketsData.markets[0]; // Fallback to first market
+
+  if (!targetMarket || !targetMarket.market_id) {
+    throw new Error(`No valid market found. Available markets: ${JSON.stringify(marketsData.markets.slice(0, 3))}`);
+  }
 
   const marketId = targetMarket.market_id;
   
@@ -341,33 +345,53 @@ function timeframeToMarketType(timeframe: string): string {
 
 // Convert PolyBackTest snapshots to candle format for backtesting
 function snapshotsToCandles(snapshots: any[]) {
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    throw new Error('Invalid snapshots data: expected non-empty array');
+  }
+
   return snapshots.map((snapshot, index) => {
-    const priceUp = snapshot.price_up || 0.5;
-    const priceDown = snapshot.price_down || 0.5;
-    const btcPrice = snapshot.btc_price || 45000;
+    // Validate snapshot has required fields
+    if (!snapshot || typeof snapshot !== 'object') {
+      console.warn(`Invalid snapshot at index ${index}:`, snapshot);
+      return null;
+    }
+
+    const priceUp = typeof snapshot.price_up === 'number' ? snapshot.price_up : 0.5;
+    const priceDown = typeof snapshot.price_down === 'number' ? snapshot.price_down : 0.5;
+    const btcPrice = typeof snapshot.btc_price === 'number' ? snapshot.btc_price : 45000;
     
     // Use YES token price as the primary price
-    // In Polymarket, this represents the probability/price of UP
     const price = priceUp;
     
-    // Calculate open, high, low, close from adjacent snapshots
+    // Calculate from adjacent snapshots
     const prevSnapshot = index > 0 ? snapshots[index - 1] : snapshot;
-    const prevPrice = prevSnapshot.price_up || 0.5;
+    const prevPrice = typeof prevSnapshot?.price_up === 'number' ? prevSnapshot.price_up : 0.5;
+    
+    // Parse timestamp safely
+    let timestamp = Date.now();
+    if (snapshot.time) {
+      try {
+        timestamp = new Date(snapshot.time).getTime();
+        if (isNaN(timestamp)) timestamp = Date.now();
+      } catch (e) {
+        timestamp = Date.now();
+      }
+    }
     
     return {
-      timestamp: new Date(snapshot.time).getTime(),
+      timestamp,
       open: prevPrice,
       high: Math.max(price, prevPrice),
       low: Math.min(price, prevPrice),
       close: price,
-      volume: snapshot.btc_price ? snapshot.btc_price * 0.01 : 1000,
-      // Extra Polymarket-specific data
-      priceUp: priceUp,
-      priceDown: priceDown,
-      btcPrice: btcPrice,
-      marketId: snapshot.market_id,
+      volume: btcPrice * 0.01,
+      // Polymarket-specific data
+      priceUp,
+      priceDown,
+      btcPrice,
+      marketId: snapshot.market_id || 'unknown',
     };
-  });
+  }).filter((c): c is NonNullable<typeof c> => c !== null);
 }
 
 // Run backtest simulation
