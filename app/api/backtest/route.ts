@@ -29,9 +29,10 @@ export async function POST(request: NextRequest) {
 
     // Step 1: Parse strategy (convert NL to params)
     const strategyParams = parseStrategy(strategy);
+    const isPolymarket = strategyParams.isPolymarket || false;
 
     // Step 2: Fetch historical data from PolyBackTest
-    const historicalData = await fetchHistoricalData(market, timeframe, period);
+    const historicalData = await fetchHistoricalData(market, timeframe, period, isPolymarket);
 
     // Step 3: Run backtest simulation
     const backtestResult = runBacktest(historicalData, strategyParams);
@@ -260,32 +261,113 @@ function parseStrategy(description: string) {
   return params;
 }
 
-// Fetch historical data from PolyBackTest API
-async function fetchHistoricalData(market: string, timeframe: string, period: number) {
-  const response = await fetch(`${API_URL}/historical`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': API_KEY!,
-    },
-    body: JSON.stringify({
-      market,
-      timeframe,
-      period,
-    }),
+// Fetch Polymarket data from PolyBackTest API
+// Step 1: Find market by type (15m, 1h, etc)
+// Step 2: Get snapshots for that market
+async function fetchHistoricalData(market: string, timeframe: string, period: number, isPolymarket: boolean = false) {
+  if (!isPolymarket) {
+    // For traditional crypto, we need a different data source
+    // PolyBackTest only provides Polymarket prediction market data
+    throw new Error('Non-Polymarket strategies require a different data provider. PolyBackTest only serves Polymarket data.');
+  }
+
+  // Step 1: List markets to find the correct one
+  const marketType = timeframeToMarketType(timeframe);
+  const marketsResponse = await fetch(
+    `${API_URL}/markets?market_type=${marketType}&limit=50`,
+    {
+      method: 'GET',
+      headers: {
+        'X-API-Key': API_KEY!,
+      },
+    }
+  );
+
+  if (!marketsResponse.ok) {
+    throw new Error(`PolyBackTest markets API error: ${marketsResponse.status} - ${marketsResponse.statusText}`);
+  }
+
+  const marketsData = await marketsResponse.json();
+  
+  if (!marketsData.markets || marketsData.markets.length === 0) {
+    throw new Error(`No markets found for type: ${marketType}`);
+  }
+
+  // Find a BTC market (or the requested market)
+  const targetMarket = marketsData.markets.find((m: any) => 
+    m.slug?.toLowerCase().includes(market.toLowerCase()) ||
+    m.market_id?.includes(market)
+  ) || marketsData.markets[0]; // Fallback to first market
+
+  const marketId = targetMarket.market_id;
+  
+  // Step 2: Get snapshots for this market
+  const snapshotsResponse = await fetch(
+    `${API_URL}/markets/${marketId}/snapshots?limit=1000`,
+    {
+      method: 'GET',
+      headers: {
+        'X-API-Key': API_KEY!,
+      },
+    }
+  );
+
+  if (!snapshotsResponse.ok) {
+    throw new Error(`PolyBackTest snapshots API error: ${snapshotsResponse.status} - ${snapshotsResponse.statusText}`);
+  }
+
+  const snapshotsData = await snapshotsResponse.json();
+  
+  if (!snapshotsData.snapshots || snapshotsData.snapshots.length === 0) {
+    throw new Error(`No snapshots found for market: ${marketId}`);
+  }
+
+  // Convert snapshots to candle-like format for backtest
+  return snapshotsToCandles(snapshotsData.snapshots);
+}
+
+// Convert timeframe to PolyBackTest market type
+function timeframeToMarketType(timeframe: string): string {
+  const mapping: Record<string, string> = {
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1hr',
+    '4h': '4hr',
+    '24h': '24hr',
+    '1d': '24hr',
+  };
+  return mapping[timeframe] || '15m';
+}
+
+// Convert PolyBackTest snapshots to candle format for backtesting
+function snapshotsToCandles(snapshots: any[]) {
+  return snapshots.map((snapshot, index) => {
+    const priceUp = snapshot.price_up || 0.5;
+    const priceDown = snapshot.price_down || 0.5;
+    const btcPrice = snapshot.btc_price || 45000;
+    
+    // Use YES token price as the primary price
+    // In Polymarket, this represents the probability/price of UP
+    const price = priceUp;
+    
+    // Calculate open, high, low, close from adjacent snapshots
+    const prevSnapshot = index > 0 ? snapshots[index - 1] : snapshot;
+    const prevPrice = prevSnapshot.price_up || 0.5;
+    
+    return {
+      timestamp: new Date(snapshot.time).getTime(),
+      open: prevPrice,
+      high: Math.max(price, prevPrice),
+      low: Math.min(price, prevPrice),
+      close: price,
+      volume: snapshot.btc_price ? snapshot.btc_price * 0.01 : 1000,
+      // Extra Polymarket-specific data
+      priceUp: priceUp,
+      priceDown: priceDown,
+      btcPrice: btcPrice,
+      marketId: snapshot.market_id,
+    };
   });
-
-  if (!response.ok) {
-    throw new Error(`PolyBackTest API error: ${response.status} - ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  
-  if (!data.candles || data.candles.length === 0) {
-    throw new Error('PolyBackTest API returned empty data');
-  }
-  
-  return data.candles;
 }
 
 // Run backtest simulation
@@ -316,7 +398,7 @@ function runBacktest(candles: any[], strategy: any): BacktestResult & { warnings
   return runTraditionalBacktest(candles, strategy, warnings);
 }
 
-// Polymarket-specific backtest (binary options with time/price triggers)
+// Polymarket-specific backtest using real snapshot data
 function runPolymarketBacktest(candles: any[], strategy: any, warnings: string[]): BacktestResult & { warnings?: string[] } {
   const timeWindow = strategy.entryConditions.find((e: any) => e.type === 'TIME_WINDOW');
   const priceThreshold = strategy.entryConditions.find((e: any) => e.type === 'PRICE_THRESHOLD');
@@ -332,59 +414,89 @@ function runPolymarketBacktest(candles: any[], strategy: any, warnings: string[]
   let totalProfit = 0;
   let totalLoss = 0;
   
-  // Polymarket 15m markets - simulate multiple market cycles
-  // Each "market" is 15 minutes, we look at last N seconds
-  const marketDurationMs = 15 * 60 * 1000; // 15 minutes
-  const entryWindowMs = (timeWindow?.value || 15) * 1000; // Last N seconds
   const priceThresholdValue = priceThreshold?.value || 0.98; // Default 98c
+  const entrySeconds = (timeWindow?.value || 15) * 1000; // Last N seconds in ms
   
-  // Simulate trading across multiple 15m market cycles
-  // For each candle, treat it as a potential market expiry
-  for (let i = 1; i < candles.length; i++) {
-    const candle = candles[i];
-    const prevCandle = candles[i - 1];
-    
-    // Check if price reached threshold in this candle
-    const priceReachedThreshold = candle.high >= priceThresholdValue || candle.close >= priceThresholdValue;
-    
-    // Simulate "last 15 seconds" condition - price hit threshold near candle close
-    const isNearClose = candle.close >= priceThresholdValue && candle.open < priceThresholdValue;
-    
-    if (priceReachedThreshold) {
-      trades++;
-      
-      // Binary outcome: Did price end up higher than entry?
-      // In Polymarket, if you buy YES at 98c, you win $1 if YES resolves, lose $0.98 if NO
-      // Payout: Risk $0.98 to win $0.02 (2% return) if correct
-      const entryPrice = priceThresholdValue; // Buy at 98c
-      const marketOutcome = Math.random() > 0.48 ? 'YES' : 'NO'; // Slight edge for YES (simulate 52% win rate)
-      
-      // Determine which side we bought
-      const boughtSide = sideCondition?.value === 'BOTH' 
-        ? (Math.random() > 0.5 ? 'YES' : 'NO') // Whichever side
-        : sideCondition?.value || 'YES';
-      
-      // Calculate PnL
-      const isWin = boughtSide === marketOutcome;
-      const tradeSize = capital * 0.05; // 5% risk per trade (conservative for binary)
-      
-      if (isWin) {
-        // Win: Get $1 payout, paid $0.98, profit = $0.02 per share
-        const profit = tradeSize * (1 - entryPrice) / entryPrice;
-        capital += profit;
-        wins++;
-        totalProfit += profit;
-      } else {
-        // Loss: Lose entire stake (or partial depending on exit)
-        const loss = tradeSize * 0.95; // 95% loss (can exit early in some cases)
-        capital -= loss;
-        losses++;
-        totalLoss += loss;
-      }
-      
-      maxCapital = Math.max(maxCapital, capital);
-      minCapital = Math.min(minCapital, capital);
+  // Group snapshots by market (15m intervals)
+  // Each snapshot has: priceUp (YES), priceDown (NO), btcPrice, timestamp
+  const markets: any[][] = [];
+  let currentMarket: any[] = [];
+  let lastTimestamp = 0;
+  
+  for (const candle of candles) {
+    // If gap is more than 20 minutes, start new market
+    if (lastTimestamp > 0 && candle.timestamp - lastTimestamp > 20 * 60 * 1000) {
+      if (currentMarket.length > 0) markets.push(currentMarket);
+      currentMarket = [];
     }
+    currentMarket.push(candle);
+    lastTimestamp = candle.timestamp;
+  }
+  if (currentMarket.length > 0) markets.push(currentMarket);
+  
+  warnings.push(`Found ${markets.length} markets in data`);
+  
+  // Simulate trading on each market
+  for (const market of markets) {
+    if (market.length < 2) continue;
+    
+    const marketStart = market[0].timestamp;
+    const marketEnd = market[market.length - 1].timestamp;
+    const marketDuration = marketEnd - marketStart;
+    
+    // Find entry window (last N seconds)
+    const entryWindowStart = marketEnd - entrySeconds;
+    
+    // Find all snapshots in entry window where price >= threshold
+    const entryCandidates = market.filter(s => 
+      s.timestamp >= entryWindowStart && s.timestamp <= marketEnd && s.priceUp >= priceThresholdValue
+    );
+    
+    if (entryCandidates.length === 0) continue;
+    
+    // Use first candidate for entry
+    const entrySnapshot = entryCandidates[0];
+    const entryPrice = entrySnapshot.priceUp;
+    
+    trades++;
+    
+    // Determine outcome - check if market resolved UP or DOWN
+    // In Polymarket binary markets, if you buy YES and market goes UP, you win
+    // We'll use the last snapshot's price to determine outcome direction
+    const lastSnapshot = market[market.length - 1];
+    const marketResolvedUp = lastSnapshot.btcPrice > entrySnapshot.btcPrice;
+    
+    // Determine which side we bought
+    let boughtSide = 'YES';
+    if (sideCondition?.value === 'BOTH') {
+      // "Whichever side" - buy the side that reached threshold
+      // If UP token reached 98c, we buy UP (YES)
+      boughtSide = 'YES';
+    } else if (sideCondition?.value === 'NO') {
+      boughtSide = 'NO';
+    }
+    
+    // Binary market payout calculation
+    // Buy at 98c: Risk $0.98 to win $1.00 (profit = $0.02 = 2%)
+    const tradeSize = capital * 0.05; // 5% of capital per trade
+    const isWin = (boughtSide === 'YES' && marketResolvedUp) || (boughtSide === 'NO' && !marketResolvedUp);
+    
+    if (isWin) {
+      // Win: Get $1.00, paid $0.98, net profit = $0.02 per $0.98 risked
+      const profit = tradeSize * ((1 - entryPrice) / entryPrice);
+      capital += profit;
+      wins++;
+      totalProfit += profit;
+    } else {
+      // Loss: Lose entire stake
+      const loss = tradeSize;
+      capital -= loss;
+      losses++;
+      totalLoss += loss;
+    }
+    
+    maxCapital = Math.max(maxCapital, capital);
+    minCapital = Math.min(minCapital, capital);
   }
 
   // Calculate metrics
@@ -393,11 +505,11 @@ function runPolymarketBacktest(candles: any[], strategy: any, warnings: string[]
   const winRate = trades > 0 ? (wins / trades) * 100 : 0;
   const maxDrawdown = maxCapital > 0 ? ((maxCapital - minCapital) / maxCapital) * 100 : 0;
   
-  // Sharpe ratio (simplified for binary outcomes)
+  // Sharpe ratio for binary outcomes
   const sharpeRatio = trades > 10 ? (winRate / 100 - 0.5) / (Math.sqrt((winRate/100)*(1-winRate/100)) + 0.001) : 0.5;
   
-  // CAGR (based on 15m markets)
-  const days = candles.length / 96; // 96 15m periods per day
+  // CAGR
+  const days = markets.length / 96; // 96 15m periods per day
   const cagr = days > 0 ? (Math.pow(1 + totalReturn / 100, 365 / days) - 1) * 100 : 0;
 
   return {
