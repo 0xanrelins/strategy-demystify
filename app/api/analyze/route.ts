@@ -4,7 +4,7 @@ import { join } from 'path';
 
 // Kimi API configuration
 const KIMI_API_KEY = process.env.KIMI_API_KEY || 'sk-kimi-fdB4OfFqHH3I6DdNrertB8YCT1yWm2Fzv5mFWkdL7kR4CxaLdXJA0Z9heGEGB2id';
-const KIMI_API_URL = 'https://api.moonshot.cn/v1/chat/completions';
+const KIMI_API_URL = 'https://api.moonshot.ai/v1/chat/completions';
 
 // Debug: Log key presence (not the actual key)
 console.log('Kimi API Key present:', !!KIMI_API_KEY);
