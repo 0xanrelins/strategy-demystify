@@ -180,6 +180,53 @@ async function fetchPolyBackTestData(timeframe: string = '15m') {
   };
 }
 
+// Calculate real RSI from price data
+function calculateRSI(prices: number[], period: number = 14): number[] {
+  const rsiValues: number[] = [];
+  
+  if (prices.length < period + 1) {
+    return prices.map(() => 50); // Default to neutral if not enough data
+  }
+  
+  let gains = 0;
+  let losses = 0;
+  
+  // Initial average gain/loss
+  for (let i = 1; i <= period; i++) {
+    const change = prices[i] - prices[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  
+  // Fill initial RSI values with null
+  for (let i = 0; i < period; i++) {
+    rsiValues.push(50);
+  }
+  
+  // Calculate RSI for remaining periods
+  for (let i = period; i < prices.length; i++) {
+    const change = prices[i] - prices[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+    
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    
+    if (avgLoss === 0) {
+      rsiValues.push(100);
+    } else {
+      const rs = avgGain / avgLoss;
+      const rsi = 100 - (100 / (1 + rs));
+      rsiValues.push(rsi);
+    }
+  }
+  
+  return rsiValues;
+}
+
 // Step 2: Run backtest simulation in TypeScript
 function runBacktestSimulation(
   params: any,
@@ -211,37 +258,46 @@ function runBacktestSimulation(
 
   // Process each market
   Object.values(marketGroups).forEach((marketSnapshots) => {
-    if (marketSnapshots.length < 2) return;
+    if (marketSnapshots.length < 15) return; // Need at least 14 periods for RSI
+
+    // Extract price history for RSI calculation
+    const priceHistory = marketSnapshots.map(s => s.price_up || 0.5);
+    const rsiValues = calculateRSI(priceHistory, 14);
 
     let entryPrice = 0;
     let entrySide: string | null = null;
-    let lastRSI: number | null = null;
+    let cooldown = 0; // Cooldown periods after entry
 
-    for (let i = 0; i < marketSnapshots.length; i++) {
+    for (let i = 15; i < marketSnapshots.length; i++) {
       const snap = marketSnapshots[i];
+      const prevSnap = marketSnapshots[i - 1];
       const priceUp = snap.price_up || 0;
       const priceDown = snap.price_down || 0;
+      const currentRSI = rsiValues[i];
+      const previousRSI = rsiValues[i - 1];
       
-      // Calculate simple RSI approximation from price changes
-      if (i > 0) {
-        const prevSnap = marketSnapshots[i - 1];
-        const priceChange = priceUp - (prevSnap.price_up || priceUp);
-        // Simplified RSI calculation
-        lastRSI = 50 - (priceChange * 100); // Rough approximation
+      // Decrement cooldown
+      if (cooldown > 0) {
+        cooldown--;
+        continue;
       }
 
       // Check entry conditions
       let shouldEnter = false;
       let side: string | null = null;
 
-      // RSI-based entry
-      if (targetRSI && lastRSI !== null && lastRSI <= targetRSI) {
-        shouldEnter = true;
-        side = 'up'; // Buy UP when RSI is low (oversold)
+      // RSI-based entry with "first touch" logic
+      // RSI crosses BELOW threshold (first touch from above)
+      if (targetRSI && currentRSI !== null && previousRSI !== null) {
+        if (previousRSI > targetRSI && currentRSI <= targetRSI) {
+          shouldEnter = true;
+          side = 'up'; // Buy UP when RSI crosses below threshold (oversold)
+          console.log(`RSI first touch: ${previousRSI.toFixed(2)} -> ${currentRSI.toFixed(2)} (target: ${targetRSI})`);
+        }
       }
       
       // Price threshold entry
-      if (priceThreshold) {
+      if (!shouldEnter && priceThreshold) {
         if (params.side_logic === 'best_available' || params.side_logic === 'up_only') {
           if (priceUp >= priceThreshold) {
             shouldEnter = true;
@@ -256,15 +312,16 @@ function runBacktestSimulation(
         }
       }
 
-      if (shouldEnter && side && !entrySide) {
+      if (shouldEnter && side) {
         entryPrice = side === 'up' ? priceUp : priceDown;
         entrySide = side;
         
         // Simulate outcome based on probability
-        // Higher entry price = higher win probability
-        const winProb = entryPrice > 0.9 ? 0.85 : 
-                       entryPrice > 0.7 ? 0.70 : 
-                       entryPrice > 0.5 ? 0.55 : 0.45;
+        // Higher entry price = higher win probability (for UP side)
+        // But for RSI strategy, we expect mean reversion
+        const winProb = entryPrice < 0.3 ? 0.70 :  // Low price = likely to go up
+                       entryPrice < 0.5 ? 0.60 : 
+                       entryPrice < 0.7 ? 0.50 : 0.40;
         
         const outcome = Math.random() < winProb ? 'win' : 'loss';
         const pnl = outcome === 'win' ? (1 - entryPrice) : -entryPrice;
@@ -275,10 +332,12 @@ function runBacktestSimulation(
           side: entrySide,
           outcome: outcome,
           pnl: pnl,
-          rsi_at_entry: lastRSI,
+          rsi_at_entry: currentRSI,
+          rsi_previous: previousRSI,
         });
 
-        // Reset for next trade
+        // Set cooldown to avoid immediate re-entry
+        cooldown = 5;
         entrySide = null;
       }
     }
