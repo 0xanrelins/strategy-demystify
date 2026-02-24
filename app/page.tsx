@@ -62,45 +62,51 @@ export default function StrategyDashboard() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-bg-primary p-6">
-      {/* Header */}
-      <header className="mb-8">
-        <h1 className="text-2xl font-bold text-text-primary font-mono">
+    <main className="h-screen bg-bg-primary flex flex-col overflow-hidden">
+      {/* Header - Fixed Height */}
+      <header className="flex-none px-6 py-4 border-b border-border bg-bg-primary">
+        <h1 className="text-xl font-bold text-text-primary font-mono">
           Strategy Demystify
         </h1>
-        <p className="text-text-secondary text-sm mt-1">
-          AI-powered trading strategy backtesting & scoring (0-100 framework)
+        <p className="text-text-secondary text-xs mt-0.5 font-mono">
+          AI-powered trading strategy backtesting & scoring
         </p>
       </header>
 
-      {/* Main Grid Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Main Grid Layout - Fills Remaining Height */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 min-h-0">
         {/* Left Column - Input & Output */}
-        <div className="space-y-4">
-          {/* Chat Input */}
-          <ChatInput
-            value={inputText}
-            onChange={setInputText}
-            onSubmit={handleSubmit}
-            isLoading={isAnalyzing}
-          />
+        <div className="flex flex-col gap-4 min-h-0">
+          {/* Chat Input - Compact */}
+          <div className="flex-none">
+            <ChatInput
+              value={inputText}
+              onChange={setInputText}
+              onSubmit={handleSubmit}
+              isLoading={isAnalyzing}
+            />
+          </div>
           
-          {/* Chat Output */}
-          <ChatOutput chat={currentChat} isLoading={isAnalyzing} />
+          {/* Chat Output - Takes remaining space */}
+          <div className="flex-1 min-h-0">
+            <ChatOutput chat={currentChat} isLoading={isAnalyzing} />
+          </div>
         </div>
 
-        {/* Right Column - Chat History List */}
-        <ChatList
-          chats={chatHistory}
-          onToggleExpand={handleToggleExpand}
-          onSelectChat={handleSelectChat}
-          currentChatId={currentChat?.id || null}
-        />
+        {/* Right Column - Chat History List - Full Height */}
+        <div className="min-h-0 h-full">
+          <ChatList
+            chats={chatHistory}
+            onToggleExpand={handleToggleExpand}
+            onSelectChat={handleSelectChat}
+            currentChatId={currentChat?.id || null}
+          />
+        </div>
       </div>
 
-      {/* Footer */}
-      <footer className="mt-8 pt-4 border-t border-border text-center text-xs text-text-muted">
-        <p>Strategy Demystify | Powered by PolyBackTest API | 0-100 Scoring Framework | Next.js + React + Tailwind CSS v4</p>
+      {/* Footer - Fixed Height */}
+      <footer className="flex-none px-6 py-2 border-t border-border text-center text-[10px] text-text-muted bg-bg-primary">
+        <p className="font-mono">Strategy Demystify | PolyBackTest API | 0-100 Scoring Framework</p>
       </footer>
     </main>
   );
