@@ -45,7 +45,7 @@ export default function ChatInput({ value, onChange, onSubmit, isLoading }: Chat
             onKeyDown={handleKeyDown}
             disabled={isLoading}
             className="w-full bg-bg-secondary border border-border rounded-lg p-3 pr-16 text-text-primary font-mono text-sm resize-none outline-none focus:border-accent-orange transition-colors min-h-[60px] disabled:opacity-50"
-            placeholder="Ask about a trading strategy... (e.g., 'RSI 30 al, 70 sat')"
+            placeholder="Ask about a trading strategy..."
             rows={2}
           />
           
