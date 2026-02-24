@@ -1,46 +1,65 @@
 "use client";
 
-import { useState } from "react";
-import StrategyInput from "./components/StrategyInput";
-import OutputPanel from "./components/OutputPanel";
-import StrategyTable from "./components/StrategyTable";
-
-interface Strategy {
-  name: string;
-  pt: number;
-  pro: number;
-  sr: number;
-  card: number;
-  ae: number;
-  total: number;
-}
-
-const initialStrategies: Strategy[] = [
-  { name: "Buy the Dip...", pt: 3.5, pro: 35, sr: 1, card: 22, ae: 35, total: 59 },
-  { name: "Low Ris...", pt: 2.2, pro: 24, sr: 0.7, card: 31, ae: 7, total: 87 },
-  { name: "Value low and VWAP Touch...", pt: 1.4, pro: 15, sr: 0.3, card: 9, ae: 21, total: 44 },
-  { name: "Strategy 5", pt: 1.4, pro: 15, sr: 0.3, card: 9, ae: 27, total: 44 },
-  { name: "Strategy 6", pt: 3.5, pro: 15, sr: 1, card: 23, ae: 5, total: 59 },
-  { name: "Strategy 7", pt: 2.5, pro: 15, sr: 1, card: 23, ae: 5, total: 59 },
-  { name: "order flow", pt: 2.5, pro: 15, sr: 1, card: 23, ae: 5, total: 59 },
-  { name: "Low Volume", pt: 2.5, pro: 15, sr: 1, card: 23, ae: 5, total: 59 },
-];
+import { useState, useCallback } from "react";
+import { ChatMessage, generateId } from "./types";
+import { mockAIResponse } from "./services/mockAI";
+import ChatInput from "./components/ChatInput";
+import ChatOutput from "./components/ChatOutput";
+import ChatList from "./components/ChatList";
 
 export default function StrategyDashboard() {
+  // Chat history state (sorted by total score, desc)
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  
+  // Currently selected/viewing chat
+  const [currentChat, setCurrentChat] = useState<ChatMessage | null>(null);
+  
+  // Loading state for AI analysis
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  // Input text state
   const [inputText, setInputText] = useState("Is this strategy my good?");
-  const [output, setOutput] = useState("output will appear here...");
-  const [strategies] = useState<Strategy[]>(initialStrategies);
-  const [isRunning, setIsRunning] = useState(false);
 
-  const handleRun = () => {
-    setIsRunning(true);
-    setOutput("Analyzing strategy...\nProcessing parameters...\nCalculating risk/reward ratios...\n");
+  // Handle new chat submission
+  const handleSubmit = useCallback(async (question: string) => {
+    if (!question.trim() || isAnalyzing) return;
     
-    setTimeout(() => {
-      setOutput((prev) => prev + "\n✓ Analysis complete\n\nStrategy Score: 87/100\nRisk Level: LOW\nProfit Target: 3.5%\nRecommended: YES");
-      setIsRunning(false);
-    }, 1500);
-  };
+    setIsAnalyzing(true);
+    
+    try {
+      // Call mock AI service
+      const newChat = await mockAIResponse(question);
+      
+      // Add to history with auto-sort (by total score, desc)
+      setChatHistory(prev => {
+        const updated = [...prev, newChat];
+        return updated.sort((a, b) => b.scores.total - a.scores.total);
+      });
+      
+      // Show in output panel
+      setCurrentChat(newChat);
+    } catch (error) {
+      console.error("Analysis failed:", error);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [isAnalyzing]);
+
+  // Handle list item expand/collapse
+  const handleToggleExpand = useCallback((chatId: string) => {
+    setChatHistory(prev => 
+      prev.map(chat => 
+        chat.id === chatId 
+          ? { ...chat, isExpanded: !chat.isExpanded }
+          : { ...chat, isExpanded: false } // Close others
+      )
+    );
+  }, []);
+
+  // Handle selecting a chat from list
+  const handleSelectChat = useCallback((chat: ChatMessage) => {
+    setCurrentChat(chat);
+  }, []);
 
   return (
     <main className="min-h-screen bg-bg-primary p-6">
@@ -50,33 +69,38 @@ export default function StrategyDashboard() {
           Strategy Demystify
         </h1>
         <p className="text-text-secondary text-sm mt-1">
-          Trading strategy analysis & backtesting dashboard
+          AI-powered trading strategy analysis
         </p>
       </header>
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left Column */}
+        {/* Left Column - Input & Output */}
         <div className="space-y-4">
-          {/* Strategy Input Panel */}
-          <StrategyInput 
-            value={inputText} 
-            onChange={setInputText} 
-            onRun={handleRun}
-            isRunning={isRunning}
+          {/* Chat Input */}
+          <ChatInput
+            value={inputText}
+            onChange={setInputText}
+            onSubmit={handleSubmit}
+            isLoading={isAnalyzing}
           />
           
-          {/* Output Panel */}
-          <OutputPanel output={output} />
+          {/* Chat Output */}
+          <ChatOutput chat={currentChat} isLoading={isAnalyzing} />
         </div>
 
-        {/* Right Column - Strategy Table */}
-        <StrategyTable strategies={strategies} />
+        {/* Right Column - Chat History List */}
+        <ChatList
+          chats={chatHistory}
+          onToggleExpand={handleToggleExpand}
+          onSelectChat={handleSelectChat}
+          currentChatId={currentChat?.id || null}
+        />
       </div>
 
       {/* Footer */}
       <footer className="mt-8 pt-4 border-t border-border text-center text-xs text-text-muted">
-        <p>Strategy Demystify Dashboard | Built with Next.js + React + Tailwind CSS v4</p>
+        <p>Strategy Demystify Dashboard | AI Strategy Analysis | Built with Next.js + React + Tailwind CSS v4</p>
       </footer>
     </main>
   );
