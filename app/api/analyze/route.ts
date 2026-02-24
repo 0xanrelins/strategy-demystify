@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-// Kimi API configuration
-const KIMI_API_KEY = process.env.KIMI_API_KEY || 'sk-kimi-fdB4OfFqHH3I6DdNrertB8YCT1yWm2Fzv5mFWkdL7kR4CxaLdXJA0Z9heGEGB2id';
-const KIMI_API_URL = 'https://api.kimi.com/coding/v1/chat/completions';
+// OpenRouter API configuration
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 // PolyBackTest API configuration
 const POLYBACKTEST_API_KEY = process.env.POLYBACKTEST_API_KEY;
@@ -155,15 +155,21 @@ Rules:
 - Consider time-window and price-threshold strategies carefully
 - Binary market strategies (Polymarket) have different risk profiles than spot trading`;
 
-    // Call Kimi API
-    const kimiResponse = await fetch(KIMI_API_URL, {
+    // Call OpenRouter API with Kimi model
+    if (!OPENROUTER_API_KEY) {
+      throw new Error('OpenRouter API key not configured');
+    }
+
+    const openrouterResponse = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${KIMI_API_KEY}`,
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://strategy-demystify.vercel.app',
+        'X-Title': 'Strategy Demystify',
       },
       body: JSON.stringify({
-        model: 'kimi-for-coding',
+        model: 'moonshotai/kimi-k2.5',
         messages: [
           {
             role: 'system',
@@ -186,23 +192,21 @@ Provide your analysis in the required JSON format.`,
         ],
         temperature: 0.2,
         max_tokens: 4000,
-        response_format: { type: 'json_object' },
       }),
     });
 
-    if (!kimiResponse.ok) {
-      const errorText = await kimiResponse.text().catch(() => 'No error details');
-      console.error('Kimi API Error Response:', {
-        status: kimiResponse.status,
-        statusText: kimiResponse.statusText,
+    if (!openrouterResponse.ok) {
+      const errorText = await openrouterResponse.text().catch(() => 'No error details');
+      console.error('OpenRouter API Error Response:', {
+        status: openrouterResponse.status,
+        statusText: openrouterResponse.statusText,
         body: errorText,
-        headers: Object.fromEntries(kimiResponse.headers.entries()),
       });
-      throw new Error(`Kimi API error: ${kimiResponse.status} - ${kimiResponse.statusText}. Details: ${errorText.substring(0, 200)}`);
+      throw new Error(`OpenRouter API error: ${openrouterResponse.status} - ${openrouterResponse.statusText}. Details: ${errorText.substring(0, 200)}`);
     }
 
-    const kimiData = await kimiResponse.json();
-    const aiResponse = kimiData.choices?.[0]?.message?.content;
+    const openrouterData = await openrouterResponse.json();
+    const aiResponse = openrouterData.choices?.[0]?.message?.content;
 
     if (!aiResponse) {
       throw new Error('Empty response from Kimi API');

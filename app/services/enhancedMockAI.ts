@@ -58,7 +58,7 @@ function formatErrorResponse(errorMessage: string): string {
 **Error:** ${errorMessage}
 
 ### Possible Causes:
-- Kimi API key not configured
+- OpenRouter API key not configured
 - PolyBackTest API key not configured
 - Network connectivity issue
 - Invalid strategy parameters
@@ -70,7 +70,7 @@ function formatErrorResponse(errorMessage: string): string {
 4. Try a different strategy description
 
 ---
-*Note: This system uses Kimi AI Agent with PolyBackTest data integration.*`;
+*Note: This system uses OpenRouter (Kimi k2.5) + PolyBackTest data integration.*`;
 }
 
 // Create ChatMessage from AI analysis response
