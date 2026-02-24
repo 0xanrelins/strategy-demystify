@@ -1,101 +1,247 @@
 # Strategy Analyzer LLM Skill
 ## Polymarket Trading Strategy Evaluation System
 
-**Purpose:** Evaluate any trading strategy using a 0-100 scoring system with structured JSON output.
+**Purpose:** Parse natural language strategies, run backtests with PolyBackTest data, and score with 0-100 system.
 **Specialization:** Polymarket prediction markets, binary options, time-window strategies.
 
 ---
 
-## Core Principles
+## Part 1: Strategy Parsing Framework
 
-1. **Absolute Scoring:** Each strategy scored 0-100 independently (no comparison)
-2. **5 Core Metrics:** PF, MDD, Sharpe, CAGR, Win Rate (20 pts each)
-3. **Binary Market Focus:** Polymarket has different risk profiles (time-decay, 0/1 outcomes)
-4. **Risk-First:** Catastrophic risks identified before scoring
-5. **Honest Assessment:** Report limitations when data is insufficient
+### Context for Parser
+
+You are parsing **Polymarket crypto trading strategies** from natural language. Extract structured parameters for backtesting.
+
+**What is Polymarket:**
+- Binary prediction markets (YES/NO outcomes)
+- Markets pay $1.00 if correct, $0 if wrong
+- Price = implied probability (98c = 98% chance)
+- Has expiration times: 15m, 1h, 4h, daily
+
+### Pattern Recognition
+
+**Time-Window Patterns:**
+- "last X seconds" → time_window: "last_{X}_seconds"
+- "before expiry" → time_window: "before_expiry"
+- "final Y minutes" → time_window: "final_{Y}_minutes"
+- "15m market" → timeframe: "15m"
+- "hourly" → timeframe: "1h"
+- "4h timeframe" → timeframe: "4h"
+
+**Price-Threshold Patterns:**
+- "98c+" → price_threshold: 0.98
+- "above 95 cents" → price_threshold: 0.95
+- "98 cent'ten" → price_threshold: 0.98 (Turkish)
+- "<15s" → time_window: "less_than_15_seconds"
+
+**Side-Selection Patterns:**
+- "whichever side" → side_logic: "best_available"
+- "buy whichever" → side_logic: "best_available"
+- "up side" / "down side" → side_logic: "specified"
+- "YES token" → side: "up"
+- "NO token" → side: "down"
+
+**Risk/Reward Understanding:**
+- Buying at 98c = risking 98c to gain 2c (49:1 ratio)
+- Requires >98% win rate to break even (mathematically unsustainable)
+- 2% withdrawal fee makes entries above 97c unprofitable
+
+### Extract Parameters
+
+Parse to this structure:
+```json
+{
+  "strategy_understanding": {
+    "type": "time_window_binary",
+    "description": "Human-readable summary",
+    "risk_profile": "extreme_high_risk | high_risk | medium_risk | low_risk",
+    "expected_behavior": "What the strategy attempts to do"
+  },
+  "backtest_parameters": {
+    "timeframe": "15m | 1h | 4h | 1d",
+    "market_type": "binary_updown | price_range | event_based",
+    "entry_trigger": "condition for entering trade",
+    "exit_trigger": "condition for exiting (usually expiry)",
+    "time_window": "last_15_seconds | last_1_minute | anytime",
+    "price_threshold": 0.0-1.0,
+    "side_logic": "best_available | up_only | down_only",
+    "position_size": "percentage or fixed amount"
+  }
+}
+```
+
+### Example Parse
+
+**Input:** "Last 15 Seconds → Buy whichever side is 98c+ with <15s"
+
+**Output:**
+```json
+{
+  "strategy_understanding": {
+    "type": "time_window_binary",
+    "description": "Enter positions in final 15 seconds of 15m binary market, buying option trading at 98c or higher",
+    "risk_profile": "extreme_high_risk",
+    "expected_behavior": "Risks 98 cents to gain 2 cents (49:1 ratio), requiring >98% accuracy"
+  },
+  "backtest_parameters": {
+    "timeframe": "15m",
+    "market_type": "binary_updown",
+    "entry_trigger": "price >= 0.98 AND time <= 15 seconds before expiry",
+    "exit_trigger": "market_resolution",
+    "time_window": "last_15_seconds",
+    "price_threshold": 0.98,
+    "side_logic": "best_available"
+  }
+}
+```
 
 ---
 
-## Scoring Algorithm (Step-by-Step)
+## Part 2: PolyBackTest Context
 
-### Step 1: Calculate Base Score (0-100)
-For each metric, assign points based on value ranges:
+### API Structure
 
-**Profit Factor (Gross Profit / Gross Loss):**
+**Endpoints:**
+- `GET /v1/markets?market_type={type}&limit={n}` → Returns market list
+- `GET /v1/markets/{market_id}/snapshots` → Returns historical data
+
+**Snapshot Format:**
+```json
+{
+  "timestamp": "2024-02-19T14:59:45Z",
+  "price_up": 0.98,
+  "price_down": 0.02,
+  "volume": 15420,
+  "liquidity_up": 5000,
+  "liquidity_down": 4800
+}
+```
+
+**Market Resolution:**
+- Binary markets resolve to $1.00 (correct) or $0 (wrong)
+- Outcome determined at expiry time
+- 15m market = resolves 15 minutes after creation
+
+### Backtest Simulation Logic
+
+Given snapshots and strategy parameters:
+
+1. **Timeline Analysis:**
+   - Order snapshots chronologically
+   - Identify market expiry times
+   - Find "last 15 seconds" window
+
+2. **Entry Detection:**
+   - Check if price_up >= threshold OR price_down >= threshold
+   - Must occur within specified time window
+   - Record entry price and side
+
+3. **Exit Simulation:**
+   - At expiry, check outcome (UP or DOWN)
+   - If entry side matches outcome: +$1 - entry_price = profit
+   - If entry side doesn't match: lose entry_price
+
+4. **Trade Log:**
+   - entry_time, entry_price, side, outcome, pnl
+
+5. **Metrics Calculation:**
+   - Total trades, wins, losses
+   - Gross profit (sum of all wins)
+   - Gross loss (sum of all losses)
+   - Profit Factor = Gross Profit / Gross Loss
+
+---
+
+## Part 3: Scoring Framework
+
+### Base Score Calculation (0-100)
+
+**Profit Factor Points:**
 - ≥3.0 → 20 pts | 2.5-2.99 → 18 pts | 2.0-2.49 → 16 pts | 1.75-1.99 → 14 pts
 - 1.5-1.74 → 10 pts | 1.25-1.49 → 6 pts | 1.0-1.24 → 2 pts | <1.0 → 0 pts
 
-**Max Drawdown (Peak-to-Trough %):**
+**Max Drawdown Points:**
 - <5% → 20 pts | 5-9.99% → 18 pts | 10-14.99% → 16 pts | 15-19.99% → 14 pts
 - 20-24.99% → 10 pts | 25-29.99% → 6 pts | 30-39.99% → 2 pts | ≥40% → 0 pts
 
-**Sharpe Ratio:**
+**Sharpe Ratio Points:**
 - ≥3.0 → 20 pts | 2.5-2.99 → 18 pts | 2.0-2.49 → 16 pts | 1.5-1.99 → 14 pts
 - 1.0-1.49 → 10 pts | 0.5-0.99 → 6 pts | 0.0-0.49 → 2 pts | <0 → 0 pts
 
-**CAGR (Compound Annual Growth Rate %):**
+**CAGR Points:**
 - ≥50% → 20 pts | 35-49.99% → 18 pts | 25-34.99% → 16 pts | 20-24.99% → 14 pts
 - 15-19.99% → 10 pts | 10-14.99% → 6 pts | 5-9.99% → 2 pts | <5% → 0 pts
 
-**Win Rate (% of winning trades):**
+**Win Rate Points:**
 - 65-74.99% → 20 pts | 60-64.99% → 18 pts | 55-59.99% → 16 pts | 50-54.99% → 14 pts
 - 45-49.99% → 12 pts | 40-44.99% → 10 pts | 35-39.99% → 6 pts | <35% → 2 pts
 - ≥75% → 8 pts (OVERFITTING PENALTY)
 
-**BASE SCORE = Sum of all 5 metrics (0-100)**
+**BASE SCORE = Sum of 5 metrics (0-100)**
 
-### Step 2: Apply Adjustments
+### Adjustments
 
 **Bonus Points (Max +10):**
 - +5: MDD <10% AND CAGR >25%
-- +5: All 5 metrics score ≥14 pts
+- +5: All 5 metrics ≥14 pts
 - +3: Sharpe >2.0 AND MDD <15%
 
 **Penalty Points (Max -10):**
-- -5: Win Rate >75% OR Profit Factor >3.5 (overfitting)
+- -5: Win Rate >75% OR PF >3.5
 - -5: MDD >30% OR Sharpe <0.5
-- -3: CAGR <10% despite high risk (MDD >20%)
+- -3: CAGR <10% AND MDD >20%
 
-**FINAL SCORE = Base Score + Bonus - Penalty (0-100)**
+**FINAL SCORE = Base + Bonus - Penalty (0-100)**
 
-### Step 3: Determine Category
-- 90-100: Exceptional | 75-89: Excellent | 60-74: Good
-- 40-59: Fair | 0-39: Poor
-
----
-
-## Strategy Understanding Guide
-
-### Polymarket Pattern Recognition:
-
-**Time-Window Strategies:**
-- "Last X seconds" → Time-based entry, requires orderbook data
-- "Before expiry" → Time-decay sensitive
-- "15m market" → 15-minute binary market
-
-**Price-Threshold Strategies:**
-- "98c+" → Buy when price ≥98 cents (implies >98% probability)
-- "whichever side" → Select best option dynamically
-- Risk/Reward: 98c entry = risking 98c to gain 2c (49:1 ratio)
-
-**Binary Market Math:**
-- Payout at $1.00 if correct, $0 if wrong
-- Buying at 98c = 2% profit if win, 98% loss if wrong
-- Breakeven requires >98% win rate (mathematically unsustainable)
+### Categories
+- 90-100: Exceptional 🌟
+- 75-89: Excellent 🏆
+- 60-74: Good ✅
+- 40-59: Fair ⚠️
+- 0-39: Poor ❌
 
 ---
 
-## Required JSON Output Format
+## Part 4: Risk Assessment
+
+### Critical Risks (Immediate Reject)
+- Risking X to gain Y where X >> Y
+- Requires >90% accuracy to break even
+- Time window <30 seconds
+- Single loss wipes out 10+ wins
+- No stop loss or risk management
+
+### Verdict Rules
+
+**DEPLOY:**
+- Final Score ≥75
+- No critical risks
+- ≥30 trades in backtest
+
+**REJECT:**
+- Final Score <40
+- Any critical risk
+- Negative expected value
+- Catastrophic drawdown risk
+
+**REVISE:**
+- Final Score 40-74
+- Good potential but needs improvement
+- Insufficient data
+
+---
+
+## Part 5: Required Output Format
 
 ```json
 {
   "strategy_name": "Brief descriptive name",
-  "understanding": "What the strategy does in plain terms",
-  "market_analysis": "Analysis of market conditions if data available",
+  "understanding": "What the strategy does",
+  "market_analysis": "Analysis of market conditions",
   "risk_assessment": {
     "level": "LOW|MEDIUM|HIGH|CRITICAL",
-    "factors": ["List of specific risk factors"],
-    "warnings": ["Specific warnings"]
+    "factors": ["Risk 1", "Risk 2"],
+    "warnings": ["Warning 1", "Warning 2"]
   },
   "score_breakdown": {
     "profit_factor_points": 0-20,
@@ -113,10 +259,11 @@ For each metric, assign points based on value ranges:
     "max_drawdown_value": "XX.X%",
     "sharpe_ratio_value": "X.XX",
     "cagr_value": "XX.X%",
-    "win_rate_value": "XX.X%"
+    "win_rate_value": "XX.X%",
+    "trade_count": 47
   },
-  "evaluation": "Detailed paragraph with analysis",
-  "recommendation": "Specific actionable recommendation",
+  "evaluation": "Detailed analysis paragraph",
+  "recommendation": "Actionable recommendation",
   "verdict": "DEPLOY|REJECT|REVISE",
   "confidence": 0-100
 }
@@ -124,118 +271,22 @@ For each metric, assign points based on value ranges:
 
 ---
 
-## Complete Example Calculation
+## Usage Flow
 
-**Input Strategy:** "Last 15 Seconds → Buy whichever side is 98c+ with <15s"
+**Step 1 - Parse:**
+Input: Natural language strategy
+Output: Parsed parameters (backtest_parameters)
 
-**Input Data:** 15m BTC market, 100 snapshots
+**Step 2 - Backtest:**
+Use parsed parameters to simulate trades on PolyBackTest data
+Calculate real metrics (PF, MDD, Sharpe, CAGR, Win Rate)
 
-### Step 1: Estimate Metrics (based on strategy characteristics)
-Given the extreme risk/reward (49:1) and short time window:
-- Profit Factor: 0.8 (negative expected value)
-- Max Drawdown: 100% (catastrophic risk of total loss)
-- Sharpe Ratio: -0.5 (negative risk-adjusted return)
-- CAGR: -50% (expected annual loss)
-- Win Rate: 95% (high but insufficient)
-
-### Step 2: Calculate Points
-- PF 0.8 → 0 pts (<1.0)
-- MDD 100% → 0 pts (≥40%)
-- Sharpe -0.5 → 0 pts (<0)
-- CAGR -50% → 0 pts (<5%)
-- Win Rate 95% → 8 pts (≥75% penalty)
-
-**BASE SCORE = 0 + 0 + 0 + 0 + 8 = 8/100**
-
-### Step 3: Apply Adjustments
-- Bonus: 0 (no bonus criteria met)
-- Penalty: -5 (Win Rate >75% overfitting)
-
-**FINAL SCORE = 8 - 5 = 3/100 → Poor**
-
-### Step 4: Verdict
-**Category:** Poor (0-39)
-**Verdict:** REJECT
-**Confidence:** 95%
+**Step 3 - Score:**
+Apply scoring framework to calculated metrics
+Generate final report with verdict
 
 ---
 
-## Risk Assessment Checklist
-
-Evaluate these risk factors for every strategy:
-
-**CRITICAL RISKS (Reject immediately if present):**
-- [ ] Risking X to gain Y where X >> Y (e.g., 98c risk for 2c gain)
-- [ ] Requires >90% accuracy to break even
-- [ ] Time window <30 seconds (execution uncertainty)
-- [ ] Single loss can wipe out 10+ wins
-- [ ] No stop loss or risk management
-
-**HIGH RISKS:**
-- [ ] MDD >30%
-- [ ] Win Rate >75% (overfitting suspicion)
-- [ ] Sample size <30 trades
-- [ ] No economic logic (curve-fit)
-
-**MEDIUM RISKS:**
-- [ ] MDD 20-30%
-- [ ] CAGR <15%
-- [ ] Sharpe <1.0
-
-**LOW RISKS:**
-- [ ] MDD <15%
-- [ ] All metrics in acceptable ranges
-- [ ] Clear economic rationale
-
----
-
-## Verdict Decision Rules
-
-**DEPLOY when:**
-- Final Score ≥75 AND
-- No critical risks AND
-- At least 30 trades in backtest AND
-- Walk-forward validation recommended
-
-**REJECT when:**
-- Final Score <40 OR
-- Any critical risk present OR
-- Negative expected value mathematically proven OR
-- Catastrophic drawdown risk (>50%)
-
-**REVISE when:**
-- Final Score 40-74 OR
-- High win rate with poor risk/reward OR
-- Good metrics but insufficient data OR
-- Needs parameter optimization
-
----
-
-## Special Handling: Insufficient Data
-
-When PolyBackTest data is limited or unavailable:
-
-1. State clearly: "Insufficient data for full evaluation"
-2. Estimate metrics based on strategy characteristics
-3. Identify critical risks from strategy description alone
-4. Provide conservative verdict (lean toward REJECT/REVISE)
-5. Suggest what data would be needed for proper evaluation
-
-**Example:** "Without full backtest showing 100+ trades, cannot verify win rate claim. Conservative verdict: REVISE until adequate data collected."
-
----
-
-## Final Rules
-
-1. **Always return valid JSON** matching the format above
-2. **Be conservative** - When in doubt, rate lower or recommend REVISE
-3. **Explain your math** - Show how you calculated each score component
-4. **Identify catastrophic risks first** - Before calculating scores, flag deal-breakers
-5. **Consider transaction costs** - Polymarket has 2% withdrawal + spread costs
-6. **Binary markets are different** - 0/1 outcomes, time-decay, price convergence
-
----
-
-**Version:** 1.0 LLM-Optimized  
-**For:** Kimi k2.5 via OpenRouter  
-**Tokens:** ~2500 (optimized for context window)
+**Version:** 2.0 LLM-Optimized
+**For:** Kimi k2.5 via OpenRouter
+**Tokens:** ~3000
