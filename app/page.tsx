@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { ChatMessage, generateId } from "./types";
-import { mockAIResponse } from "./services/mockAI";
+import { enhancedAIResponse } from "./services/enhancedMockAI";
 import ChatInput from "./components/ChatInput";
 import ChatOutput from "./components/ChatOutput";
 import ChatList from "./components/ChatList";
@@ -27,8 +27,8 @@ export default function StrategyDashboard() {
     setIsAnalyzing(true);
     
     try {
-      // Call mock AI service
-      const newChat = await mockAIResponse(question);
+      // Call enhanced AI service (tries real API first, falls back to mock)
+      const newChat = await enhancedAIResponse(question);
       
       // Add to history with auto-sort (by total score, desc)
       setChatHistory(prev => {
@@ -69,7 +69,7 @@ export default function StrategyDashboard() {
           Strategy Demystify
         </h1>
         <p className="text-text-secondary text-sm mt-1">
-          AI-powered trading strategy analysis
+          AI-powered trading strategy backtesting & scoring (0-100 framework)
         </p>
       </header>
 
@@ -100,7 +100,7 @@ export default function StrategyDashboard() {
 
       {/* Footer */}
       <footer className="mt-8 pt-4 border-t border-border text-center text-xs text-text-muted">
-        <p>Strategy Demystify Dashboard | AI Strategy Analysis | Built with Next.js + React + Tailwind CSS v4</p>
+        <p>Strategy Demystify | Powered by PolyBackTest API | 0-100 Scoring Framework | Next.js + React + Tailwind CSS v4</p>
       </footer>
     </main>
   );
